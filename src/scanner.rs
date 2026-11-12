@@ -233,9 +233,14 @@ fn add_outcome((mut reports, stats): Totals, outcome: Outcome) -> Totals {
     }
 }
 
+/// What a scan is working on right now; `main` decides how (and whether) to show it.
+pub type Progress<'a> = &'a dyn Fn(&str);
+
 /// Scans every file under `root`: list of files -> one `Outcome` per file.
-pub fn scan_files(root: &Path, matcher: &Matcher, max_size: u64) -> Vec<Outcome> {
-    walk(root.to_path_buf()).into_iter().map(|entry| scan_file(entry, matcher, max_size)).collect()
+/// `progress` is told the path of each file before it is read.
+pub fn scan_files(root: &Path, matcher: &Matcher, max_size: u64, progress: Progress) -> Vec<Outcome> {
+    let announce = |entry: &io::Result<(PathBuf, u64)>| entry.iter().for_each(|(path, _)| progress(&path.display().to_string()));
+    walk(root.to_path_buf()).into_iter().inspect(announce).map(|entry| scan_file(entry, matcher, max_size)).collect()
 }
 
 /// Sums outcomes (from files, devices and processes alike) into the final
@@ -369,7 +374,7 @@ mod tests {
         fs::write(dir.join("clean.txt"), "nothing here").unwrap();
         fs::write(dir.join("big.bin"), [0u8; 64]).unwrap();
 
-        let (reports, stats) = total(scan_files(&dir, &Matcher::new(Confidence::Medium), 40).into_iter());
+        let (reports, stats) = total(scan_files(&dir, &Matcher::new(Confidence::Medium), 40, &|_| ()).into_iter());
         fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!((stats.files_scanned, stats.skipped_large, stats.errors), (2, 1, 0));

@@ -14,24 +14,26 @@
 //! Reading other users' or system processes needs administrator / root rights;
 //! processes that cannot be opened are counted as errors.
 
-use crate::scanner::{stream_outcome, Counts, Matcher, Outcome};
+use crate::scanner::{stream_outcome, Counts, Matcher, Outcome, Progress};
 
 /// Scans one process (`only`) or all of them. The scanner itself is skipped:
-/// its own memory holds every signature.
-pub fn scan_processes(matcher: &Matcher, only: Option<u32>) -> Vec<Outcome> {
+/// its own memory holds every signature. `progress` is told each process name.
+pub fn scan_processes(matcher: &Matcher, only: Option<u32>, progress: Progress) -> Vec<Outcome> {
     let pids = only.map_or_else(os::process_ids, |pid| vec![pid]);
-    pids.into_iter().filter(|&pid| pid != std::process::id()).map(|pid| scan_process(pid, matcher)).collect()
+    pids.into_iter().filter(|&pid| pid != std::process::id()).map(|pid| scan_process(pid, matcher, progress)).collect()
 }
 
 /// Scans all readable regions of one process. The counts are carried from
 /// region to region, so the result is one set of findings per process.
-fn scan_process(pid: u32, matcher: &Matcher) -> Outcome {
+fn scan_process(pid: u32, matcher: &Matcher, progress: Progress) -> Outcome {
     let Ok(process) = os::Process::open(pid) else { return Outcome::Error };
+    let name = format!("pid {pid} ({})", process.name());
+    progress(&name);
     let scanned = process.regions().into_iter().fold((Counts::new(), 0), |(counts, bytes), (start, len)| {
         let (counts, read) = matcher.count_stream(process.reader(start, len), start, counts);
         (counts, bytes + read)
     });
-    stream_outcome(format!("pid {pid} ({})", process.name()), "Process memory", scanned)
+    stream_outcome(name, "Process memory", scanned)
 }
 
 /// One line of `/proc/<pid>/maps`, e.g.
@@ -265,7 +267,7 @@ mod tests {
         let mut child = Command::new("sort").stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
         child.stdin.as_mut().unwrap().write_all(b"-----BEGIN RSA PRIVATE KEY-----\n").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let outcomes = scan_processes(&Matcher::new(Confidence::High), Some(child.id()));
+        let outcomes = scan_processes(&Matcher::new(Confidence::High), Some(child.id()), &|_| ());
         child.kill().unwrap();
         child.wait().unwrap();
 
@@ -278,7 +280,7 @@ mod tests {
     #[test]
     fn skips_itself_and_reports_unopenable_process() {
         let m = Matcher::new(Confidence::High);
-        assert!(scan_processes(&m, Some(std::process::id())).is_empty());
-        assert!(matches!(scan_processes(&m, Some(u32::MAX - 7))[..], [Outcome::Error]));
+        assert!(scan_processes(&m, Some(std::process::id()), &|_| ()).is_empty());
+        assert!(matches!(scan_processes(&m, Some(u32::MAX - 7), &|_| ())[..], [Outcome::Error]));
     }
 }

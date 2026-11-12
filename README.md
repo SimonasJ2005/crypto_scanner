@@ -33,6 +33,9 @@ Requires a recent stable [Rust](https://rustup.rs) toolchain (developed and test
 | `--max-size-mb <n>` | skip files larger than n MB (default 200) |
 | `-h`, `--help` | show usage |
 
+While scanning, a status line on the terminal shows the current file or process; it goes to
+stderr, so `> report.txt` or `| tail` receive only the report.
+
 At least one target is required (a path, `--device`, `--ram` or `--pid`); they can be combined
 in one run. Exit codes: `0` success, `1` a report file could not be written, `2` bad arguments
 or path.
@@ -166,6 +169,6 @@ a test checks that every signature can be found by the matcher.
   reported.
 - Memory scanning is implemented for Linux and Windows only. On other systems (macOS) the file
   and device scans work, and `--ram` / `--pid` report errors.
-- Tested on Windows. The Linux code is compiled and lint-checked but has not been run on a
-  Linux machine; raw devices have been tested only through image files, not real disks.
+- Tested on Windows and Linux (all tests pass on both). Raw devices have been tested only
+  through image files, not real disks.
 - Scanning the project directory itself reports the scanner's own signatures inside `target/`.

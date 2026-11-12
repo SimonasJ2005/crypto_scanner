@@ -15,7 +15,10 @@ mod scanner;
 mod signatures;
 
 use signatures::Confidence;
+use std::cell::Cell;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
 /// Everything the user can set on the command line.
@@ -90,6 +93,26 @@ fn fail(msg: String, code: i32) -> ! {
     process::exit(code)
 }
 
+/// Progress display: returns a function that shows what is being scanned on one
+/// line that overwrites itself (`\r` returns to the start of the line). It writes
+/// to stderr, so a report redirected with `>` or `|` stays clean, and it stays
+/// silent when stderr is not a terminal. At most ten updates a second are drawn;
+/// an empty text always draws and so wipes the line.
+fn status_line() -> impl Fn(&str) {
+    let on_screen = io::stderr().is_terminal();
+    let last_drawn = Cell::new(Instant::now());
+    move |what: &str| {
+        if on_screen && (what.is_empty() || last_drawn.get().elapsed() >= Duration::from_millis(100)) {
+            last_drawn.set(Instant::now());
+            // keep the end of a long path: the file name matters more than the root
+            let skip = what.chars().count().saturating_sub(68);
+            let shown: String = what.chars().skip(skip).collect();
+            let label = if what.is_empty() { "" } else { "scanning " };
+            eprint!("\r{:<78}\r", format!("{label}{shown}"));
+        }
+    }
+}
+
 /// Writes one finished report to disk.
 fn save(kind: &str, path: &Path, content: String) {
     fs::write(path, content).unwrap_or_else(|e| fail(format!("could not write {kind} report: {e}"), 1));
@@ -112,10 +135,12 @@ fn main() {
     // build the signature index once; every requested target yields a list of
     // outcomes, and all of them are summed into one report
     let matcher = scanner::Matcher::new(opts.min_conf);
-    let files = opts.root.iter().flat_map(|root| scanner::scan_files(root, &matcher, opts.max_size));
+    let progress = status_line();
+    let files = opts.root.iter().flat_map(|root| scanner::scan_files(root, &matcher, opts.max_size, &progress));
     let device = opts.device.iter().map(|path| scanner::scan_device(path, &matcher));
-    let ram = if opts.ram || opts.pid.is_some() { memory::scan_processes(&matcher, opts.pid) } else { Vec::new() };
+    let ram = if opts.ram || opts.pid.is_some() { memory::scan_processes(&matcher, opts.pid, &progress) } else { Vec::new() };
     let (reports, stats) = scanner::total(files.chain(device).chain(ram));
+    progress(""); // wipe the status line before the report
     println!("{}", report::to_text(&reports, &stats));
 
     // optional machine-readable reports
