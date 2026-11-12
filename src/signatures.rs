@@ -1,43 +1,47 @@
 //! Signature database: byte patterns that reveal cryptographic algorithms.
+//!
+//! Crypto code cannot work without certain fixed data, and that data ends up
+//! inside the compiled file where it can be searched for:
+//!   - lookup tables and constants defined by the algorithm (AES S-box, SHA-256
+//!     round constants, MD5 sine table). Multi-byte constants are listed in both
+//!     byte orders because the order in the file depends on the CPU/compiler;
+//!   - ASN.1 OIDs: the standard identifiers stored in keys and certificates;
+//!   - PEM headers and SSH key prefixes: text markers of stored key material;
+//!   - API and library names (OpenSSL, mbedTLS, Windows CNG ...);
+//!   - plain text markers such as "AES-256", the only way to learn the key size.
+//!
+//! To add a signature, add one `sg(...)` line to `SIGNATURES`. Patterns must be
+//! at least 2 bytes long (the scanner indexes them by their first two bytes).
 
+/// How strongly a match indicates the algorithm. The order matters: variants
+/// are compared (`Low < Medium < High`) to filter and to pick the best match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
-    Low,
-    Medium,
-    High,
+    Low,    // short or common byte sequence, may appear by chance
+    Medium, // names and text markers: could also come from documentation
+    High,   // long constant tables and exact headers: practically no false hits
 }
 
 impl Confidence {
+    /// Name used in the reports; the variant's position selects the label.
     pub fn label(self) -> &'static str {
-        match self {
-            Confidence::Low => "LOW",
-            Confidence::Medium => "MEDIUM",
-            Confidence::High => "HIGH",
-        }
+        ["LOW", "MEDIUM", "HIGH"][self as usize]
     }
+    /// Reads a level from the command line, ignoring letter case.
     pub fn parse(s: &str) -> Option<Confidence> {
-        match s.to_ascii_lowercase().as_str() {
-            "low" => Some(Confidence::Low),
-            "medium" => Some(Confidence::Medium),
-            "high" => Some(Confidence::High),
-            _ => None,
-        }
+        [Low, Medium, High].into_iter().find(|c| c.label().eq_ignore_ascii_case(s))
     }
 }
 
 pub struct Signature {
-    pub algorithm: &'static str,
-    pub description: &'static str,
+    pub algorithm: &'static str,   // group name; also the key for `quantum_status`
+    pub description: &'static str, // what exactly was recognised
     pub confidence: Confidence,
-    pub pattern: &'static [u8],
+    pub pattern: &'static [u8], // the bytes searched for in the file
 }
 
-const fn sg(
-    algorithm: &'static str,
-    description: &'static str,
-    confidence: Confidence,
-    pattern: &'static [u8],
-) -> Signature {
+/// Short constructor so that each table row fits on one line.
+const fn sg(algorithm: &'static str, description: &'static str, confidence: Confidence, pattern: &'static [u8]) -> Signature {
     Signature { algorithm, description, confidence, pattern }
 }
 
@@ -133,6 +137,9 @@ pub static SIGNATURES: &[Signature] = &[
 ];
 
 /// Quantum-computing status of an algorithm (used in the report).
+/// Shor's algorithm breaks public-key schemes based on factoring and discrete
+/// logarithms outright; Grover's algorithm only halves the effective key length
+/// of symmetric ciphers and hashes, so 256-bit ones stay safe.
 pub fn quantum_status(algorithm: &str) -> &'static str {
     match algorithm {
         "RSA" | "ECC" | "Ed25519" | "DH/DSA" => "BROKEN by Shor - migrate to post-quantum (ML-KEM / ML-DSA)",

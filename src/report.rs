@@ -1,10 +1,19 @@
 //! Console, JSON and CSV reports as pure functions returning text.
+//!
+//! Nothing here prints or writes files: every function takes the scan results
+//! and returns a `String`, and `main` decides where it goes. That keeps the
+//! formatting testable without touching the disk. JSON and CSV are built by
+//! hand (with their own escaping) so the program needs no external crates.
 
 use crate::scanner::{FileReport, ScanStats};
 use crate::signatures::{quantum_status, Confidence};
 use std::collections::BTreeMap;
 
-/// algorithm -> (number of files it appears in, highest confidence seen)
+/// algorithm -> (number of files it appears in, highest confidence seen).
+/// Done in two steps so that a file with several signatures of the same
+/// algorithm is still counted once: first reduce each file to one entry per
+/// algorithm, then merge those entries across all files.
+/// A `BTreeMap` keeps the algorithms sorted by name for the report.
 fn summarize(reports: &[FileReport]) -> BTreeMap<&'static str, (usize, Confidence)> {
     let best_in_file = |r: &FileReport| {
         r.findings.iter().fold(BTreeMap::new(), |mut best, f| {
@@ -20,6 +29,7 @@ fn summarize(reports: &[FileReport]) -> BTreeMap<&'static str, (usize, Confidenc
     })
 }
 
+/// Console block for one file: a header line, then one line per finding.
 fn file_text(r: &FileReport) -> String {
     let findings: String = r
         .findings
@@ -32,6 +42,7 @@ fn file_text(r: &FileReport) -> String {
     format!("{}  [{}, {} bytes]\n{findings}\n", r.path.display(), r.kind, r.size)
 }
 
+/// Full console report: totals, every file with findings, summary per algorithm.
 pub fn to_text(reports: &[FileReport], stats: &ScanStats) -> String {
     let files: String = reports.iter().map(file_text).collect();
     let summary: String = summarize(reports)
@@ -40,8 +51,8 @@ pub fn to_text(reports: &[FileReport], stats: &ScanStats) -> String {
         .collect();
     format!(
         "=== Crypto scanner report ===\n\
-         Files scanned: {} ({:.1} MB) | skipped (too large): {} | errors: {}\n\
-         Files with crypto indicators: {}\n\n\
+         Objects scanned: {} ({:.1} MB) | skipped (too large): {} | errors: {}\n\
+         Objects with crypto indicators: {}\n\n\
          {files}\
          === Summary by algorithm ===\n\
          {:<18} {:>5}  {:<7} Quantum status\n\
@@ -57,20 +68,23 @@ pub fn to_text(reports: &[FileReport], stats: &ScanStats) -> String {
     )
 }
 
+/// Escapes a string for JSON: quotes, backslashes and control characters.
+/// Needed e.g. for Windows paths, which are full of backslashes.
 fn json_esc(s: &str) -> String {
     s.chars()
         .map(|c| match c {
-            '"' => "\\\"".to_string(),
-            '\\' => "\\\\".to_string(),
-            '\n' => "\\n".to_string(),
-            '\r' => "\\r".to_string(),
-            '\t' => "\\t".to_string(),
+            '"' | '\\' => format!("\\{c}"),
+            '\n' => "\\n".into(),
+            '\r' => "\\r".into(),
+            '\t' => "\\t".into(),
             c if (c as u32) < 0x20 => format!("\\u{:04x}", c as u32),
             c => c.to_string(),
         })
         .collect()
 }
 
+/// JSON object for one file. Items are joined with commas (`join`), so there is
+/// never a trailing comma, which JSON does not allow.
 fn file_json(r: &FileReport) -> String {
     let findings: Vec<String> = r
         .findings
@@ -96,6 +110,7 @@ fn file_json(r: &FileReport) -> String {
     )
 }
 
+/// Full JSON report: the statistics plus an array of files.
 pub fn to_json(reports: &[FileReport], stats: &ScanStats) -> String {
     let files: Vec<String> = reports.iter().map(file_json).collect();
     format!(
@@ -107,10 +122,13 @@ pub fn to_json(reports: &[FileReport], stats: &ScanStats) -> String {
     )
 }
 
+/// Quotes a CSV field; a quote inside the field is written as two quotes.
 fn csv_esc(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// CSV report: a header row, then one row per finding (file columns repeat),
+/// convenient for sorting and filtering in a spreadsheet.
 pub fn to_csv(reports: &[FileReport]) -> String {
     let header = "path,file_type,algorithm,description,confidence,offset_hex,count,quantum_status\n".to_string();
     let rows = reports.iter().flat_map(|r| {
@@ -154,7 +172,7 @@ mod tests {
     #[test]
     fn text_report() {
         let text = to_text(&sample(), &ScanStats { files_scanned: 1, ..Default::default() });
-        assert!(text.starts_with("=== Crypto scanner report ===\nFiles scanned: 1 (0.0 MB)"));
+        assert!(text.starts_with("=== Crypto scanner report ===\nObjects scanned: 1 (0.0 MB)"));
         assert!(text.contains("    [HIGH  ] RSA               PEM header: RSA PRIVATE KEY @0x0 (x1)\n"));
         assert!(text.contains("RSA                    1  HIGH    BROKEN by Shor"));
     }
